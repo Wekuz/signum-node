@@ -25,6 +25,7 @@ plugins {
   id 'jacoco'
   id "com.github.node-gradle.node" version "7.0.1"
   id 'org.kordamp.gradle.jdeps' version '0.20.0'
+  id 'com.google.protobuf' version '0.9.4'
 }
 
 java {
@@ -86,6 +87,10 @@ dependencies {
   implementation 'com.github.jiconfont:jiconfont-swing:1.0.1'
   implementation 'com.github.jiconfont:jiconfont-font_awesome:4.7.0.1'
 
+  //gRPC
+  implementation 'com.google.protobuf:protobuf-java:4.28.0'
+  implementation 'io.grpc:grpc-all:1.66.0' // TODO: (grpc) Maybe include only necessary packages
+
   //logging
   implementation 'org.apache.logging.log4j:log4j-api:2.17.1'
   implementation 'org.apache.logging.log4j:log4j-core:2.17.1'
@@ -114,10 +119,25 @@ test {
   }
 }
 
+protobuf {
+    protoc { artifact = "com.google.protobuf:protoc:4.28.0" }
+    plugins { grpc { artifact = "io.grpc:protoc-gen-grpc-java:1.66.0" } }
+    generateProtoTasks {
+      all()*.plugins {
+          grpc {}
+        }
+    }
+}
+
 sourceSets {
   main {
     java {
       srcDir "src"
+      srcDirs "build/generated/source/proto/main/grpc"
+      srcDirs "build/generated/source/proto/main/java"
+    }
+    proto {
+        srcDir "src/proto"
     }
     resources {
       srcDir "resources"

@@ -9,6 +9,7 @@ import brs.props.PropertyService;
 import com.zaxxer.hikari.HikariConfig;
 import org.flywaydb.core.Flyway;
 import org.jooq.*;
+import org.jooq.Record;
 import org.jooq.conf.Settings;
 import org.jooq.conf.StatementType;
 import org.jooq.impl.DSL;

@@ -7,6 +7,10 @@ import brs.SignumException;
 import brs.Version;
 import brs.crypto.Crypto;
 import brs.fluxcapacitor.FluxValues;
+import brs.peer.proto.PeersServiceGrpc;
+import brs.peer.proto.PeersServiceGrpc.PeersServiceBlockingStub;
+import brs.peer.proto.getInfoReq;
+import brs.peer.proto.getInfoRes;
 import brs.props.Props;
 import brs.util.Convert;
 import brs.util.CountingInputStream;
@@ -14,6 +18,9 @@ import brs.util.CountingOutputStream;
 import brs.util.JSON;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import io.grpc.ManagedChannel;
+import io.grpc.ManagedChannelBuilder;
+import io.grpc.StatusRuntimeException;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.ByteArrayOutputStream;
@@ -63,6 +70,7 @@ final class PeerImpl implements Peer {
     private final AtomicInteger lastUpdated = new AtomicInteger();
     private byte[] lastDownloadedTransactionsDigest;
     private final Object lastDownloadedTransactionsLock = new Object();
+    private PeersServiceBlockingStub grpcStub = null;
 
     PeerImpl(String peerAddress, String announcedAddress) {
         this.peerAddress = peerAddress;
@@ -75,6 +83,8 @@ final class PeerImpl implements Peer {
         this.state.set(State.NON_CONNECTED);
         this.version.set(Version.EMPTY); // not null
         this.shareAddress.set(true);
+
+        grpcStub = createGrpcStub();
     }
 
     @Override
@@ -227,6 +237,8 @@ final class PeerImpl implements Peer {
         String announcedPeerAddress = Peers.normalizeHostAndPort(announcedAddress);
         if (announcedPeerAddress != null) {
             this.announcedAddress.set(announcedPeerAddress);
+            // TODO: (grpc) Check if this doesnt break on-going rpcs
+            grpcStub = createGrpcStub(); // New channel and stub is needed, when address changes
             try {
                 this.port.set(new URL(Constants.HTTP + announcedPeerAddress).getPort());
             } catch (MalformedURLException ignored) {
@@ -342,118 +354,149 @@ final class PeerImpl implements Peer {
     @Override
     public JsonObject send(final JsonElement request) {
 
-        JsonObject response;
+        JsonObject response = new JsonObject();
 
-        String log = null;
-        boolean showLog = false;
-        HttpURLConnection connection = null;
-
-        try {
-
-            String address = announcedAddress.get() != null ? announcedAddress.get() : peerAddress;
-            StringBuilder buf = new StringBuilder(Constants.HTTP);
-            buf.append(address);
-            if (port.get() <= 0) {
-                buf.append(':');
-                buf.append(Signum.getPropertyService().getInt(Props.P2P_PORT));
-            }
-            buf.append("/burst");
-            URL url = new URL(buf.toString());
-
-            if (Peers.communicationLoggingMask != 0) {
-                StringWriter stringWriter = new StringWriter();
-                JSON.writeTo(request, stringWriter);
-                log = "\"" + url.toString() + "\": " + stringWriter.toString();
-            }
-
-            connection = (HttpURLConnection) url.openConnection();
-            connection.setRequestMethod("POST");
-            connection.setDoOutput(true);
-            connection.setConnectTimeout(Peers.connectTimeout);
-            connection.setReadTimeout(Peers.readTimeout);
-            connection.addRequestProperty("User-Agent", "BRS/" + Signum.VERSION.toString());
-            connection.setRequestProperty("Accept-Encoding", "gzip");
-            connection.setRequestProperty("Connection", "close");
-
-            CountingOutputStream cos = new CountingOutputStream(connection.getOutputStream());
-            try (Writer writer = new BufferedWriter(
-                    new OutputStreamWriter(cos, StandardCharsets.UTF_8))) {
-                JSON.writeTo(request, writer);
-            } // rico666: no catch?
-            updateUploadedVolume(cos.getCount());
-
-            if (connection.getResponseCode() == HttpURLConnection.HTTP_OK) {
-                CountingInputStream cis = new CountingInputStream(connection.getInputStream());
-                InputStream responseStream = cis;
-                if ("gzip".equals(connection.getHeaderField("Content-Encoding"))) {
-                    responseStream = new GZIPInputStream(cis);
+        if (false) { // TODO: (grpc) enable
+            try {
+                switch (request.getAsJsonObject().get("requestType").getAsString()) {
+                    case "getInfo":
+                        getInfoRes res = grpcStub.getInfo(getInfoReq.newBuilder()
+                                .setAnnouncedAddress(request.getAsJsonObject().get("announcedAddress").getAsString())
+                                .setApplication(request.getAsJsonObject().get("application").getAsString())
+                                .setVersion(request.getAsJsonObject().get("version").getAsString())
+                                .setPlatform(request.getAsJsonObject().get("platform").getAsString())
+                                .setShareAddress(
+                                        Boolean.parseBoolean(
+                                                request.getAsJsonObject().get("shareAddress").getAsString()))
+                                .setNetworkName(request.getAsJsonObject().get("networkName").getAsString())
+                                .build());
+                        // TODO: (grpc) Check if everything is recieved
+                        response.addProperty("application", res.getApplication());
+                        response.addProperty("version", res.getVersion());
+                        response.addProperty("platform", res.getPlatform());
+                        response.addProperty("shareAddress", res.getShareAddress());
+                        response.addProperty("networkName", res.getNetworkName());
+                        break;
+                    default:
+                        break;
                 }
-                if ((Peers.communicationLoggingMask & Peers.LOGGING_MASK_200_RESPONSES) != 0) {
-                    ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-                    byte[] buffer = new byte[1024];
-                    int numberOfBytes;
-                    try (InputStream inputStream = responseStream) {
-                        while ((numberOfBytes = inputStream.read(buffer, 0, buffer.length)) > 0) {
-                            byteArrayOutputStream.write(buffer, 0, numberOfBytes);
+            } catch (StatusRuntimeException e) {
+                response = error("Peer response exceeded the deadline. Error: " + e.getClass().toString() + ": "
+                        + e.getMessage());
+            } catch (Exception e) {
+                response = error(e.toString());
+            }
+        } else { // HTTP
+            String log = null;
+            boolean showLog = false;
+            HttpURLConnection connection = null;
+
+            try {
+
+                String address = announcedAddress.get() != null ? announcedAddress.get() : peerAddress;
+                StringBuilder buf = new StringBuilder(Constants.HTTP);
+                buf.append(address);
+                if (port.get() <= 0) {
+                    buf.append(':');
+                    buf.append(Signum.getPropertyService().getInt(Props.P2P_PORT));
+                }
+                buf.append("/burst");
+                URL url = new URL(buf.toString());
+
+                if (Peers.communicationLoggingMask != 0) {
+                    StringWriter stringWriter = new StringWriter();
+                    JSON.writeTo(request, stringWriter);
+                    log = "\"" + url.toString() + "\": " + stringWriter.toString();
+                }
+
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("POST");
+                connection.setDoOutput(true);
+                connection.setConnectTimeout(Peers.connectTimeout);
+                connection.setReadTimeout(Peers.readTimeout);
+                connection.addRequestProperty("User-Agent", "BRS/" + Signum.VERSION.toString());
+                connection.setRequestProperty("Accept-Encoding", "gzip");
+                connection.setRequestProperty("Connection", "close");
+
+                CountingOutputStream cos = new CountingOutputStream(connection.getOutputStream());
+                try (Writer writer = new BufferedWriter(
+                        new OutputStreamWriter(cos, StandardCharsets.UTF_8))) {
+                    JSON.writeTo(request, writer);
+                } // rico666: no catch?
+                updateUploadedVolume(cos.getCount());
+
+                if (connection.getResponseCode() == HttpURLConnection.HTTP_OK) {
+                    CountingInputStream cis = new CountingInputStream(connection.getInputStream());
+                    InputStream responseStream = cis;
+                    if ("gzip".equals(connection.getHeaderField("Content-Encoding"))) {
+                        responseStream = new GZIPInputStream(cis);
+                    }
+                    if ((Peers.communicationLoggingMask & Peers.LOGGING_MASK_200_RESPONSES) != 0) {
+                        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+                        byte[] buffer = new byte[1024];
+                        int numberOfBytes;
+                        try (InputStream inputStream = responseStream) {
+                            while ((numberOfBytes = inputStream.read(buffer, 0, buffer.length)) > 0) {
+                                byteArrayOutputStream.write(buffer, 0, numberOfBytes);
+                            }
+                        }
+                        String responseValue = byteArrayOutputStream.toString("UTF-8");
+                        if (!responseValue.isEmpty() && responseStream instanceof GZIPInputStream) {
+                            log += String.format(
+                                    "[length: %d, compression ratio: %.2f]",
+                                    cis.getCount(),
+                                    (double) cis.getCount() / (double) responseValue.length());
+                        }
+                        log += " >>> " + responseValue;
+                        showLog = true;
+                        response = JSON.getAsJsonObject(JSON.parse(responseValue));
+                    } else {
+                        try (Reader reader = new BufferedReader(
+                                new InputStreamReader(responseStream, StandardCharsets.UTF_8))) {
+                            response = JSON.getAsJsonObject(JSON.parse(reader));
                         }
                     }
-                    String responseValue = byteArrayOutputStream.toString("UTF-8");
-                    if (!responseValue.isEmpty() && responseStream instanceof GZIPInputStream) {
-                        log += String.format(
-                                "[length: %d, compression ratio: %.2f]",
-                                cis.getCount(),
-                                (double) cis.getCount() / (double) responseValue.length());
-                    }
-                    log += " >>> " + responseValue;
-                    showLog = true;
-                    response = JSON.getAsJsonObject(JSON.parse(responseValue));
+                    updateDownloadedVolume(cis.getCount());
                 } else {
-                    try (Reader reader = new BufferedReader(
-                            new InputStreamReader(responseStream, StandardCharsets.UTF_8))) {
-                        response = JSON.getAsJsonObject(JSON.parse(reader));
-                    }
-                }
-                updateDownloadedVolume(cis.getCount());
-            } else {
 
-                if ((Peers.communicationLoggingMask & Peers.LOGGING_MASK_NON200_RESPONSES) != 0) {
-                    log += " >>> Peer responded with HTTP "
-                            + connection.getResponseCode() + " code!";
+                    if ((Peers.communicationLoggingMask & Peers.LOGGING_MASK_NON200_RESPONSES) != 0) {
+                        log += " >>> Peer responded with HTTP "
+                                + connection.getResponseCode() + " code!";
+                        showLog = true;
+                    }
+                    if (state.get() == State.CONNECTED) {
+                        setState(State.DISCONNECTED);
+                    } else {
+                        setState(State.NON_CONNECTED);
+                    }
+                    response = error("Peer responded with HTTP " + connection.getResponseCode());
+                }
+
+            } catch (RuntimeException | IOException e) {
+                if (!isConnectionException(e)) {
+                    logger.debug("Error sending JSON request", e);
+                }
+                if ((Peers.communicationLoggingMask & Peers.LOGGING_MASK_EXCEPTIONS) != 0) {
+                    log += " >>> " + e.toString();
                     showLog = true;
                 }
                 if (state.get() == State.CONNECTED) {
                     setState(State.DISCONNECTED);
-                } else {
-                    setState(State.NON_CONNECTED);
                 }
-                response = error("Peer responded with HTTP " + connection.getResponseCode());
+                response = error("Error getting response from peer: "
+                        + e.getClass().toString() + ": " + e.getMessage());
             }
 
-        } catch (RuntimeException | IOException e) {
-            if (!isConnectionException(e)) {
-                logger.debug("Error sending JSON request", e);
+            if (showLog) {
+                logger.info(log);
             }
-            if ((Peers.communicationLoggingMask & Peers.LOGGING_MASK_EXCEPTIONS) != 0) {
-                log += " >>> " + e.toString();
-                showLog = true;
-            }
-            if (state.get() == State.CONNECTED) {
-                setState(State.DISCONNECTED);
-            }
-            response = error("Error getting response from peer: "
-                    + e.getClass().toString() + ": " + e.getMessage());
-        }
 
-        if (showLog) {
-            logger.info(log);
-        }
-
-        if (connection != null) {
-            connection.disconnect();
+            if (connection != null) {
+                connection.disconnect();
+            }
         }
 
         return response;
-
     }
 
     private boolean isConnectionException(Throwable e) {
@@ -509,4 +552,23 @@ final class PeerImpl implements Peer {
         }
     }
 
+    @Override
+    public PeersServiceBlockingStub createGrpcStub() {
+        String address;
+        try {
+            address = new URL(
+                    "http://" + (this.announcedAddress.get() != null ? this.announcedAddress.get() : this.peerAddress))
+                    .getHost();
+        } catch (MalformedURLException ignored) {
+            address = null;
+        }
+        ManagedChannel channel = ManagedChannelBuilder
+                .forAddress(address, 8127) // HACK: (grpc) Dont hard-code port
+                .usePlaintext()
+                .build();
+        PeersServiceBlockingStub stub = PeersServiceGrpc.newBlockingStub(channel)
+                .withDeadlineAfter(Peers.readTimeout, java.util.concurrent.TimeUnit.MILLISECONDS);
+        channel.shutdown();
+        return stub;
+    }
 }

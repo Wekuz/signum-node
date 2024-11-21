@@ -1,0 +1,168 @@
+syntax = "proto3";
+
+package brs.peer;
+
+option java_multiple_files = true;
+option java_package = "brs.peer.proto";
+// option java_outer_classname = "GrpcServletProto";
+
+message BlockProto { // static Block parseBlock(JsonObject blockData, int height)
+    uint64 version = 1;
+    uint64 timestamp = 2;
+    uint64 previousBlock = 3;
+    uint64 totalAmountNQT = 4;
+    uint64 totalFeeNQT = 5;
+    optional uint64 totalFeeCashBackNQT = 6;
+    optional uint64 totalFeeBurntNQT = 7;
+    uint64 payloadLength = 8;
+    bytes payloadHash = 9;
+    bytes generatorPublicKey = 10;
+    bytes generationSignature = 11;
+    bytes blockSignature = 12;
+    bytes previousBlockHash = 13;
+    uint64 nonce = 14;
+    uint64 baseTarget = 15;
+    bytes blockATs = 16;
+    repeated TransactionProto transactions = 17;
+}
+
+message AttachmentProto {
+    // TODO: (grpc) Proto implement Attachment type - parseAttachment(JsonObject attachmentData)
+}
+
+message TransactionProto { // static Transaction parseTransaction(JsonObject transactionData, int height)
+    uint32 type = 1;
+    uint32 subtype = 2;
+    int32 timestamp = 3;
+    int32 deadline = 4;
+    bytes senderPublicKey = 5;
+    uint64 amountNQT = 6;
+    uint64 feeNQT = 7;
+    string referencedTransactionFullHash = 8;
+    bytes signature = 9;
+    int32 version = 10;
+    AttachmentProto attachment = 11;
+    optional uint64 recipient = 12;
+    optional int32 ecBlockHeight = 13;
+    optional uint64 ecBlockId = 14;
+    optional uint64 cashBackId = 15;
+}
+
+message addPeersReq {
+    repeated string peers = 1;
+}
+
+message addPeersRes {
+    // Empty
+}
+
+message getCumulativeDifficultyReq {
+    // Empty
+}
+
+message getCumulativeDifficultyRes {
+    string cumulativeDifficulty = 1;
+    int64 blockchainHeight = 2;
+}
+
+message getInfoReq {
+    string announcedAddress = 1;
+    string application = 2;
+    string platform = 3;
+    string version = 4;
+    string networkName = 5;
+    bool shareAddress = 6; 
+}
+
+message getInfoRes {
+    optional string announcedAddress = 1;
+    string application = 2;
+    string version = 3;
+    string platform = 4;
+    bool shareAddress = 5;
+    string networkName = 6;
+}
+
+message getMilestoneBlockIdReq {
+    string lastBlockId = 1;
+    string lastMilestoneBlockId = 2;
+}
+
+message getMilestoneBlockIdRes {
+    repeated string milestoneBlockIds = 1;
+    optional bool last = 2;
+    optional string error = 3;
+}
+
+message getNextBlockIdsReq {
+    uint64 blockId = 1;
+}
+
+message getNextBlockIdsRes {
+    repeated uint64 nextBlockIds = 1;
+}
+
+message getBlocksFromHeightReq {
+    uint32 height = 1;
+    optional uint32 numBlocks = 2;
+}
+
+message getBlocksFromHeightRes {
+    repeated BlockProto nextBlocks = 1;
+}
+
+message getNextBlocksReq {
+    uint64 blockId = 1;
+    optional int64 numBlocks = 2;
+}
+
+message getNextBlocksRes {
+    repeated BlockProto nextBlocks = 1;
+}
+
+message getPeersReq {
+    // Empty
+}
+
+message getPeersRes {
+    repeated string peers = 1;
+}
+
+message getUnconfirmedTransactionsReq {
+    // Empty
+}
+
+message getUnconfirmedTransactionsRes {
+    repeated TransactionProto unconfirmedTransactions = 1;
+}
+
+message processBlockReq {
+    uint64 previousBlock = 1;
+    BlockProto block = 2;
+}
+
+message processBlockRes {
+    bool accepted = 1;
+}
+
+message processTransactionsReq {   
+    repeated TransactionProto transactions = 1;
+}
+
+message processTransactionsRes {
+    optional string error = 1;
+}
+
+service PeersService {
+    rpc addPeers(addPeersReq) returns (addPeersRes);
+    rpc getCumulativeDifficulty(getCumulativeDifficultyReq) returns (getCumulativeDifficultyRes);
+    rpc getInfo(getInfoReq) returns (getInfoRes);
+    rpc getMilestoneBlockId(getMilestoneBlockIdReq) returns (getMilestoneBlockIdRes);
+    rpc getNextBlockIds(getNextBlockIdsReq) returns (getNextBlockIdsRes);
+    rpc getBlocksFromHeight(getBlocksFromHeightReq) returns (getBlocksFromHeightRes);
+    rpc getNextBlocks(getNextBlocksReq) returns (getNextBlocksRes);
+    rpc getPeers(getPeersReq) returns (getPeersRes);
+    rpc getUnconfirmedTransactions(getUnconfirmedTransactionsReq) returns (getUnconfirmedTransactionsRes);
+    rpc processBlock(processBlockReq) returns (processBlockRes);
+    rpc processTransactions(processTransactionsReq) returns (processTransactionsRes);
+}

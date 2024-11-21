@@ -5,6 +5,7 @@ import brs.db.SignumKey;
 import brs.db.store.DerivedTableManager;
 import brs.db.store.IndirectIncomingStore;
 import org.jooq.*;
+import org.jooq.Record;
 import org.jooq.exception.DataAccessException;
 
 import java.util.ArrayList;

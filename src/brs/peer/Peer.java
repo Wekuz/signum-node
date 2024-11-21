@@ -1,6 +1,9 @@
 package brs.peer;
 
 import brs.Version;
+import brs.peer.proto.PeersServiceGrpc.PeersServiceBlockingStub;
+
+import java.util.HashMap;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
@@ -71,6 +74,8 @@ public interface Peer extends Comparable<Peer> {
     int getLastUpdated();
 
     JsonObject send(JsonElement request);
+
+    PeersServiceBlockingStub createGrpcStub();
 
     static boolean isHigherOrEqualVersion(Version ourVersion, Version possiblyLowerVersion) {
         if (ourVersion == null || possiblyLowerVersion == null) {
